@@ -1,15 +1,8 @@
-mod auth;
-mod config;
-mod error;
-mod routes;
-mod state;
-
 use std::time::Duration;
 
+use api::{auth, config::Config, routes, state::AppState};
 use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::EnvFilter;
-
-use crate::{config::Config, state::AppState};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

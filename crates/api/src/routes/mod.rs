@@ -1,12 +1,25 @@
-use axum::{Router, middleware, routing::get};
+use axum::{Router, middleware, routing::get, routing::post};
+use serde::{Deserialize, Serialize};
 use tower_http::trace::TraceLayer;
+use uuid::Uuid;
 
 use crate::{auth, error::AppError, state::AppState};
 
+pub mod customers;
 pub mod health;
+pub mod invoices;
+pub mod webhooks;
 
 pub fn router(state: AppState) -> Router {
+    // Every business route must live here so the API-key layer covers it.
     let protected = Router::new()
+        .route("/customers", post(customers::create).get(customers::list))
+        .route("/customers/{id}", get(customers::get))
+        .route("/invoices", post(invoices::create).get(invoices::list))
+        .route("/invoices/{id}", get(invoices::get))
+        .route("/invoices/{id}/void", post(invoices::void))
+        .route("/invoices/{id}/uncollectible", post(invoices::mark_uncollectible))
+        .route("/webhook_endpoints", post(webhooks::create).get(webhooks::list))
         .fallback(not_found)
         .layer(middleware::from_fn_with_state(state.clone(), auth::require_api_key));
 
@@ -19,4 +32,56 @@ pub fn router(state: AppState) -> Router {
 
 async fn not_found() -> AppError {
     AppError::not_found("route")
+}
+
+const DEFAULT_PAGE_SIZE: i64 = 20;
+const MAX_PAGE_SIZE: i64 = 100;
+
+#[derive(Deserialize)]
+pub struct ListParams {
+    pub limit: Option<String>,
+    pub cursor: Option<String>,
+    pub state: Option<String>,
+}
+
+impl ListParams {
+    pub fn limit(&self) -> Result<i64, AppError> {
+        match self.limit.as_deref() {
+            None => Ok(DEFAULT_PAGE_SIZE),
+            Some(raw) => raw
+                .parse::<i64>()
+                .ok()
+                .filter(|n| (1..=MAX_PAGE_SIZE).contains(n))
+                .ok_or_else(|| {
+                    AppError::validation(format!("limit must be an integer from 1 to {MAX_PAGE_SIZE}"))
+                }),
+        }
+    }
+
+    pub fn cursor(&self) -> Result<Option<Uuid>, AppError> {
+        self.cursor
+            .as_deref()
+            .map(|raw| Uuid::parse_str(raw).map_err(|_| AppError::validation("cursor is invalid")))
+            .transpose()
+    }
+}
+
+/// Keyset page: `next_cursor` is the id of the last item, or null on the last page.
+#[derive(Serialize)]
+pub struct Page<T> {
+    pub data: Vec<T>,
+    pub next_cursor: Option<Uuid>,
+}
+
+impl<T> Page<T> {
+    /// `rows` must be fetched with `LIMIT limit + 1` to detect a following page.
+    pub fn from_rows(mut rows: Vec<T>, limit: i64, id_of: impl Fn(&T) -> Uuid) -> Self {
+        let has_more = rows.len() as i64 > limit;
+        rows.truncate(limit as usize);
+        let next_cursor = if has_more { rows.last().map(id_of) } else { None };
+        Self {
+            data: rows,
+            next_cursor,
+        }
+    }
 }
