@@ -1,0 +1,35 @@
+# Isolated project: every container, network and volume is prefixed `paynexa_`.
+name: paynexa
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-paynexa}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-paynexa}
+      POSTGRES_DB: ${POSTGRES_DB:-paynexa}
+    ports:
+      - "127.0.0.1:${DB_HOST_PORT:-5544}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-paynexa}:${POSTGRES_PASSWORD:-paynexa}@db:5432/${POSTGRES_DB:-paynexa}
+      BIND_ADDR: 0.0.0.0:8080
+      RUST_LOG: ${RUST_LOG:-info,tower_http=info}
+      DEV_API_KEY: ${DEV_API_KEY:-pnx_live_devkey01_DEVONLY_local_demo_key_not_a_secret}
+    ports:
+      - "127.0.0.1:${API_HOST_PORT:-8088}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
