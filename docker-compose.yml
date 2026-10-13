@@ -31,5 +31,16 @@ services:
       db:
         condition: service_healthy
 
+  psp:
+    build: .
+    command: ["/usr/local/bin/mock-psp"]
+    environment:
+      BIND_ADDR: 0.0.0.0:8081
+      RUST_LOG: ${RUST_LOG:-info,tower_http=info}
+      PSP_LATENCY_MS: ${PSP_LATENCY_MS:-100}
+      PSP_TIMEOUT_TOKEN_MS: ${PSP_TIMEOUT_TOKEN_MS:-30000}
+    ports:
+      - "127.0.0.1:${PSP_HOST_PORT:-8089}:8081"
+
 volumes:
   pgdata:
