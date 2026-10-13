@@ -39,7 +39,10 @@ fn validate_url(raw: &str) -> Result<String, AppError> {
         .strip_prefix("https://")
         .or_else(|| url.strip_prefix("http://"));
     let has_host = host.is_some_and(|rest| !rest.is_empty() && !rest.starts_with('/'));
-    if !has_host || url.len() > MAX_URL_LEN || url.contains(char::is_whitespace) {
+    if !has_host
+        || url.len() > MAX_URL_LEN
+        || url.contains(|c: char| c.is_whitespace() || c.is_control())
+    {
         return Err(AppError::validation("url must be an absolute http(s) URL"));
     }
     Ok(url.to_string())

@@ -24,23 +24,30 @@ pub struct PricedLine {
 /// Validates line items and returns them priced, plus the invoice total.
 pub fn price_lines(items: &[LineInput]) -> Result<(Vec<PricedLine>, i64), String> {
     if items.is_empty() || items.len() > MAX_LINE_ITEMS {
-        return Err(format!("line_items must contain 1 to {MAX_LINE_ITEMS} items"));
+        return Err(format!(
+            "line_items must contain 1 to {MAX_LINE_ITEMS} items"
+        ));
     }
 
     let mut total: i64 = 0;
     let mut priced = Vec::with_capacity(items.len());
     for (i, item) in items.iter().enumerate() {
         let description = item.description.trim();
-        if description.is_empty() || description.chars().count() > MAX_DESCRIPTION_CHARS {
+        if description.is_empty()
+            || description.chars().count() > MAX_DESCRIPTION_CHARS
+            || description.contains(char::is_control)
+        {
             return Err(format!(
-                "line_items[{i}].description must be 1 to {MAX_DESCRIPTION_CHARS} characters"
+                "line_items[{i}].description must be 1 to {MAX_DESCRIPTION_CHARS} characters without control characters"
             ));
         }
         if item.quantity <= 0 {
             return Err(format!("line_items[{i}].quantity must be greater than 0"));
         }
         if item.unit_amount_cents < 0 {
-            return Err(format!("line_items[{i}].unit_amount_cents must not be negative"));
+            return Err(format!(
+                "line_items[{i}].unit_amount_cents must not be negative"
+            ));
         }
         let line_total = item
             .quantity
@@ -105,5 +112,15 @@ mod tests {
             unit_amount_cents: 1,
         };
         assert!(price_lines(&[blank]).is_err());
+    }
+
+    #[test]
+    fn rejects_control_characters_in_description() {
+        let nul = LineInput {
+            description: "bad\0item".into(),
+            quantity: 1,
+            unit_amount_cents: 1,
+        };
+        assert!(price_lines(&[nul]).is_err());
     }
 }

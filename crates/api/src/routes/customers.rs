@@ -35,16 +35,19 @@ pub struct CreateCustomer {
 
 fn validate(body: &CreateCustomer) -> Result<(String, String), AppError> {
     let name = body.name.trim();
-    if name.is_empty() || name.chars().count() > MAX_NAME_CHARS {
+    if name.is_empty() || name.chars().count() > MAX_NAME_CHARS || name.contains(char::is_control) {
         return Err(AppError::validation(format!(
-            "name must be 1 to {MAX_NAME_CHARS} characters"
+            "name must be 1 to {MAX_NAME_CHARS} characters without control characters"
         )));
     }
     let email = body.email.trim();
     let well_formed = email
         .split_once('@')
         .is_some_and(|(local, domain)| !local.is_empty() && domain.contains('.'));
-    if !well_formed || email.len() > MAX_EMAIL_CHARS || email.contains(char::is_whitespace) {
+    if !well_formed
+        || email.len() > MAX_EMAIL_CHARS
+        || email.contains(|c: char| c.is_whitespace() || c.is_control())
+    {
         return Err(AppError::validation("email is not a valid address"));
     }
     Ok((name.to_string(), email.to_string()))

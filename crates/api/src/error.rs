@@ -33,11 +33,27 @@ impl AppError {
     }
 
     pub fn not_found(what: &str) -> Self {
-        Self::new(StatusCode::NOT_FOUND, "not_found", format!("{what} not found"))
+        Self::new(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            format!("{what} not found"),
+        )
+    }
+
+    pub fn method_not_allowed() -> Self {
+        Self::new(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "method_not_allowed",
+            "method not allowed for this route",
+        )
     }
 
     pub fn validation(message: impl Into<String>) -> Self {
-        Self::new(StatusCode::UNPROCESSABLE_ENTITY, "validation_error", message)
+        Self::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation_error",
+            message,
+        )
     }
 
     pub fn invalid_transition(current: &str, target: &str) -> Self {

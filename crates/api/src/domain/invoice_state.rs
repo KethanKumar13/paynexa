@@ -85,7 +85,10 @@ mod tests {
 
     #[test]
     fn invalid_transition_is_a_conflict_error() {
-        assert_eq!(transition(Processing, Void).unwrap_err().code(), "invalid_state_transition");
+        assert_eq!(
+            transition(Processing, Void).unwrap_err().code(),
+            "invalid_state_transition"
+        );
         assert_eq!(transition(Open, Void).unwrap(), Void);
     }
 

@@ -14,7 +14,13 @@ async fn business(db: &PgPool, prefix: &str) -> String {
     key
 }
 
-async fn call(db: &PgPool, key: &str, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
+async fn call(
+    db: &PgPool,
+    key: &str,
+    method: &str,
+    uri: &str,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
     let req = Request::builder()
         .method(method)
         .uri(uri)
@@ -27,12 +33,23 @@ async fn call(db: &PgPool, key: &str, method: &str, uri: &str, body: Option<Valu
         .unwrap();
     let status = resp.status();
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    let json = if bytes.is_empty() { Value::Null } else { serde_json::from_slice(&bytes).unwrap() };
+    let json = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap()
+    };
     (status, json)
 }
 
 async fn create_customer(db: &PgPool, key: &str) -> String {
-    let (status, body) = call(db, key, "POST", "/customers", Some(json!({"name": "Ada", "email": "ada@example.com"}))).await;
+    let (status, body) = call(
+        db,
+        key,
+        "POST",
+        "/customers",
+        Some(json!({"name": "Ada", "email": "ada@example.com"})),
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
     body["id"].as_str().unwrap().to_string()
 }
@@ -65,9 +82,30 @@ async fn tenants_cannot_see_or_use_each_others_data(db: PgPool) {
     let invoice = create_invoice(&db, &a, &customer).await;
     let invoice_id = invoice["id"].as_str().unwrap();
 
-    assert_eq!(call(&db, &b, "GET", &format!("/customers/{customer}"), None).await.0, StatusCode::NOT_FOUND);
-    assert_eq!(call(&db, &b, "GET", &format!("/invoices/{invoice_id}"), None).await.0, StatusCode::NOT_FOUND);
-    assert_eq!(call(&db, &b, "POST", &format!("/invoices/{invoice_id}/void"), None).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(
+        call(&db, &b, "GET", &format!("/customers/{customer}"), None)
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(&db, &b, "GET", &format!("/invoices/{invoice_id}"), None)
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(
+            &db,
+            &b,
+            "POST",
+            &format!("/invoices/{invoice_id}/void"),
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
 
     let (status, body) = call(
         &db,
@@ -127,13 +165,27 @@ async fn server_computes_total_and_rejects_client_money_fields(db: PgPool) {
 #[sqlx::test(migrations = "../../migrations")]
 async fn invoice_created_is_written_to_the_outbox(db: PgPool) {
     let key = business(&db, "outbox01").await;
-    let (status, endpoint) =
-        call(&db, &key, "POST", "/webhook_endpoints", Some(json!({"url": "http://receiver.test/hook"}))).await;
+    let (status, endpoint) = call(
+        &db,
+        &key,
+        "POST",
+        "/webhook_endpoints",
+        Some(json!({"url": "http://receiver.test/hook"})),
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
-    assert!(endpoint["signing_secret"].as_str().unwrap().starts_with("whsec_"));
+    assert!(
+        endpoint["signing_secret"]
+            .as_str()
+            .unwrap()
+            .starts_with("whsec_")
+    );
 
     let (_, listed) = call(&db, &key, "GET", "/webhook_endpoints", None).await;
-    assert!(listed[0].get("signing_secret").is_none(), "secret must not be listed");
+    assert!(
+        listed[0].get("signing_secret").is_none(),
+        "secret must not be listed"
+    );
 
     let customer = create_customer(&db, &key).await;
     let invoice = create_invoice(&db, &key, &customer).await;
@@ -144,7 +196,13 @@ async fn invoice_created_is_written_to_the_outbox(db: PgPool) {
     .fetch_all(&db)
     .await
     .unwrap();
-    assert_eq!(events, [("invoice.created".to_string(), invoice["id"].as_str().unwrap().to_string())]);
+    assert_eq!(
+        events,
+        [(
+            "invoice.created".to_string(),
+            invoice["id"].as_str().unwrap().to_string()
+        )]
+    );
 }
 
 #[sqlx::test(migrations = "../../migrations")]
@@ -155,10 +213,14 @@ async fn invalid_transitions_are_rejected_with_current_state(db: PgPool) {
     let id = invoice["id"].as_str().unwrap();
 
     let (status, voided) = call(&db, &key, "POST", &format!("/invoices/{id}/void"), None).await;
-    assert_eq!((status, voided["status"].as_str()), (StatusCode::OK, Some("void")));
+    assert_eq!(
+        (status, voided["status"].as_str()),
+        (StatusCode::OK, Some("void"))
+    );
 
     for action in ["void", "uncollectible"] {
-        let (status, body) = call(&db, &key, "POST", &format!("/invoices/{id}/{action}"), None).await;
+        let (status, body) =
+            call(&db, &key, "POST", &format!("/invoices/{id}/{action}"), None).await;
         assert_eq!(status, StatusCode::CONFLICT, "{body}");
         assert_eq!(body["error"]["code"], "invalid_state_transition");
         assert_eq!(body["error"]["details"]["current_state"], "void");
@@ -173,6 +235,37 @@ async fn invalid_transitions_are_rejected_with_current_state(db: PgPool) {
 }
 
 #[sqlx::test(migrations = "../../migrations")]
+async fn errors_keep_the_json_format(db: PgPool) {
+    let key = business(&db, "errors01").await;
+
+    let (status, body) = call(&db, &key, "DELETE", "/customers", None).await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(body["error"]["code"], "method_not_allowed");
+
+    let (status, body) = call(
+        &db,
+        &key,
+        "POST",
+        "/customers",
+        Some(json!({"name": "A\0da", "email": "ada@example.com"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+
+    let customer = create_customer(&db, &key).await;
+    let (status, body) = call(
+        &db,
+        &key,
+        "POST",
+        "/invoices",
+        Some(json!({"customer_id": customer, "due_date": "2026-12-31",
+                    "line_items": [{"description": "x\0y", "quantity": 1, "unit_amount_cents": 1}]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+}
+
+#[sqlx::test(migrations = "../../migrations")]
 async fn customer_list_pages_with_cursor(db: PgPool) {
     let key = business(&db, "paging01").await;
     for _ in 0..3 {
@@ -181,7 +274,14 @@ async fn customer_list_pages_with_cursor(db: PgPool) {
     let (_, first) = call(&db, &key, "GET", "/customers?limit=2", None).await;
     assert_eq!(first["data"].as_array().unwrap().len(), 2);
     let cursor = first["next_cursor"].as_str().unwrap();
-    let (_, second) = call(&db, &key, "GET", &format!("/customers?limit=2&cursor={cursor}"), None).await;
+    let (_, second) = call(
+        &db,
+        &key,
+        "GET",
+        &format!("/customers?limit=2&cursor={cursor}"),
+        None,
+    )
+    .await;
     assert_eq!(second["data"].as_array().unwrap().len(), 1);
     assert!(second["next_cursor"].is_null());
 }

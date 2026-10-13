@@ -1,6 +1,7 @@
 use axum::{Router, middleware, routing::get, routing::post};
 use serde::{Deserialize, Serialize};
-use tower_http::trace::TraceLayer;
+use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
+use tracing::Level;
 use uuid::Uuid;
 
 use crate::{auth, error::AppError, state::AppState};
@@ -18,20 +19,38 @@ pub fn router(state: AppState) -> Router {
         .route("/invoices", post(invoices::create).get(invoices::list))
         .route("/invoices/{id}", get(invoices::get))
         .route("/invoices/{id}/void", post(invoices::void))
-        .route("/invoices/{id}/uncollectible", post(invoices::mark_uncollectible))
-        .route("/webhook_endpoints", post(webhooks::create).get(webhooks::list))
+        .route(
+            "/invoices/{id}/uncollectible",
+            post(invoices::mark_uncollectible),
+        )
+        .route(
+            "/webhook_endpoints",
+            post(webhooks::create).get(webhooks::list),
+        )
         .fallback(not_found)
-        .layer(middleware::from_fn_with_state(state.clone(), auth::require_api_key));
+        .method_not_allowed_fallback(method_not_allowed)
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_api_key,
+        ));
 
     Router::new()
         .route("/healthz", get(health::healthz))
         .merge(protected)
-        .layer(TraceLayer::new_for_http())
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+                .on_response(DefaultOnResponse::new().level(Level::INFO)),
+        )
         .with_state(state)
 }
 
 async fn not_found() -> AppError {
     AppError::not_found("route")
+}
+
+async fn method_not_allowed() -> AppError {
+    AppError::method_not_allowed()
 }
 
 const DEFAULT_PAGE_SIZE: i64 = 20;
@@ -53,7 +72,9 @@ impl ListParams {
                 .ok()
                 .filter(|n| (1..=MAX_PAGE_SIZE).contains(n))
                 .ok_or_else(|| {
-                    AppError::validation(format!("limit must be an integer from 1 to {MAX_PAGE_SIZE}"))
+                    AppError::validation(format!(
+                        "limit must be an integer from 1 to {MAX_PAGE_SIZE}"
+                    ))
                 }),
         }
     }
@@ -78,7 +99,11 @@ impl<T> Page<T> {
     pub fn from_rows(mut rows: Vec<T>, limit: i64, id_of: impl Fn(&T) -> Uuid) -> Self {
         let has_more = rows.len() as i64 > limit;
         rows.truncate(limit as usize);
-        let next_cursor = if has_more { rows.last().map(id_of) } else { None };
+        let next_cursor = if has_more {
+            rows.last().map(id_of)
+        } else {
+            None
+        };
         Self {
             data: rows,
             next_cursor,

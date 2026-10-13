@@ -53,7 +53,10 @@ pub struct CreateInvoice {
     line_items: Vec<LineInput>,
 }
 
-async fn load_line_items(conn: &mut PgConnection, invoice_id: Uuid) -> Result<Vec<LineItem>, AppError> {
+async fn load_line_items(
+    conn: &mut PgConnection,
+    invoice_id: Uuid,
+) -> Result<Vec<LineItem>, AppError> {
     Ok(sqlx::query_as(
         "SELECT description, quantity, unit_amount_cents, line_total_cents
          FROM invoice_line_items WHERE invoice_id = $1 ORDER BY position",
@@ -154,7 +157,9 @@ pub async fn list(
         .as_deref()
         .map(|raw| {
             InvoiceStatus::parse(raw).ok_or_else(|| {
-                AppError::validation("state must be one of open, processing, paid, void, uncollectible")
+                AppError::validation(
+                    "state must be one of open, processing, paid, void, uncollectible",
+                )
             })
         })
         .transpose()?;
@@ -200,14 +205,13 @@ async fn change_status(
     target: InvoiceStatus,
 ) -> Result<Json<Invoice>, AppError> {
     let mut tx = state.db.begin().await?;
-    let (current,): (String,) = sqlx::query_as(
-        "SELECT status FROM invoices WHERE id = $1 AND business_id = $2 FOR UPDATE",
-    )
-    .bind(id)
-    .bind(business_id)
-    .fetch_optional(&mut *tx)
-    .await?
-    .ok_or_else(|| AppError::not_found("invoice"))?;
+    let (current,): (String,) =
+        sqlx::query_as("SELECT status FROM invoices WHERE id = $1 AND business_id = $2 FOR UPDATE")
+            .bind(id)
+            .bind(business_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or_else(|| AppError::not_found("invoice"))?;
     let current = InvoiceStatus::parse(&current)
         .ok_or_else(|| AppError::internal(format!("unknown invoice status {current:?}")))?;
     let next = transition(current, target)?;
