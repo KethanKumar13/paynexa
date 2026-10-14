@@ -30,6 +30,7 @@ pub fn router(state: AppState) -> Router {
             "/webhook_endpoints",
             post(webhooks::create).get(webhooks::list),
         )
+        .route("/webhook_events", get(webhooks::list_events))
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .layer(middleware::from_fn_with_state(
@@ -64,6 +65,7 @@ pub struct ListParams {
     pub limit: Option<String>,
     pub cursor: Option<String>,
     pub state: Option<String>,
+    pub status: Option<String>,
 }
 
 impl ListParams {

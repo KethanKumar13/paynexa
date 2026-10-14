@@ -75,8 +75,8 @@ stateDiagram-v2
 ## 4. Webhook Design
 
 - **Outbox:** event rows (one per active endpoint) are written in the same transaction as the state change, so a committed payment never loses its event.
-- **Delivery:** a background dispatcher, off the request path, polls every 1 s with `FOR UPDATE SKIP LOCKED`; 5 s timeout, 2xx = delivered.
-- **Signing:** `Paynexa-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, "<t>.<raw body>")>` plus `Paynexa-Event-Id`; per-endpoint secret shown once. Receivers reject timestamps older than 5 min and dedupe on event ID (at-least-once).
+- **Delivery:** a background dispatcher, off the request path, polls every 1 s. One short statement claims up to 20 due events (`FOR UPDATE SKIP LOCKED`) and leases them for 30 s by pushing `next_attempt_at`; delivery then runs with no lock held (5 s timeout, redirects not followed, 2xx = delivered). A crash mid-delivery just lets the lease expire, so the event is retried. Events for an inactive endpoint are marked `failed`. No ordering guarantee (a batch is sent concurrently and retries reorder events); payloads carry `created_at` and `GET /invoices/{id}` is the source of truth.
+- **Signing:** body = stored payload + `id`; headers `Paynexa-Event-Id`, `Paynexa-Event-Type`, `Paynexa-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, "<t>.<raw body>")>`; per-endpoint secret shown once and stored in plaintext, because HMAC needs the raw key (encrypt at rest in production). Receivers reject timestamps older than 5 min and dedupe on event ID (at-least-once).
 - **Retries:** 0, 1 m, 5 m, 15 m, 1 h, 6 h (6 attempts, ~7.3 h), env-configurable for tests. Then `failed` with `last_error`; businesses reconcile via `GET /webhook_events?status=failed` and `GET /invoices/{id}`.
 
 ## 5. API Key Model

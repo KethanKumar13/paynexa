@@ -1,4 +1,8 @@
-use axum::{Extension, Json, extract::State, http::StatusCode};
+use axum::{
+    Extension, Json,
+    extract::{Query, State},
+    http::StatusCode,
+};
 use chrono::{DateTime, Utc};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
@@ -6,9 +10,25 @@ use serde_json::{Value, json};
 use sqlx::PgConnection;
 use uuid::Uuid;
 
+use super::{ListParams, Page};
 use crate::{auth::BusinessId, error::AppError, extract::ApiJson, state::AppState};
 
 const MAX_URL_LEN: usize = 2048;
+const EVENT_STATUSES: [&str; 3] = ["pending", "delivered", "failed"];
+
+#[derive(Serialize, sqlx::FromRow)]
+pub struct WebhookEvent {
+    pub id: Uuid,
+    pub endpoint_id: Uuid,
+    pub event_type: String,
+    pub status: String,
+    pub attempt_count: i32,
+    pub next_attempt_at: DateTime<Utc>,
+    pub last_error: Option<String>,
+    pub delivered_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub payload: Value,
+}
 
 #[derive(Serialize, sqlx::FromRow)]
 pub struct WebhookEndpoint {
@@ -91,6 +111,46 @@ pub async fn list(
     .fetch_all(&state.db)
     .await?;
     Ok(Json(endpoints))
+}
+
+/// Lets a business reconcile deliveries, e.g. `?status=failed` after retries run out.
+pub async fn list_events(
+    State(state): State<AppState>,
+    Extension(BusinessId(business_id)): Extension<BusinessId>,
+    Query(params): Query<ListParams>,
+) -> Result<Json<Page<WebhookEvent>>, AppError> {
+    let limit = params.limit()?;
+    let status = params
+        .status
+        .as_deref()
+        .map(|raw| {
+            EVENT_STATUSES
+                .into_iter()
+                .find(|s| *s == raw)
+                .ok_or_else(|| {
+                    AppError::validation("status must be one of pending, delivered, failed")
+                })
+        })
+        .transpose()?;
+
+    let rows: Vec<WebhookEvent> = sqlx::query_as(
+        "SELECT id, endpoint_id, event_type, status, attempt_count, next_attempt_at,
+                last_error, delivered_at, created_at, payload
+         FROM webhook_events
+         WHERE business_id = $1
+           AND ($2::text IS NULL OR status = $2)
+           AND ($3::uuid IS NULL OR (created_at, id) <
+                (SELECT created_at, id FROM webhook_events WHERE id = $3 AND business_id = $1))
+         ORDER BY created_at DESC, id DESC
+         LIMIT $4",
+    )
+    .bind(business_id)
+    .bind(status)
+    .bind(params.cursor()?)
+    .bind(limit + 1)
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(Page::from_rows(rows, limit, |e| e.id)))
 }
 
 /// Outbox write: call inside the transaction that made the state change.

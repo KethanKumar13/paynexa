@@ -1,8 +1,12 @@
 use std::time::Duration;
 
 use api::{
-    auth, config::Config, routes, services::psp_client::PspClient, state::AppState,
-    workers::sweeper,
+    auth,
+    config::Config,
+    routes,
+    services::{psp_client::PspClient, webhook_delivery::WebhookClient},
+    state::AppState,
+    workers::{sweeper, webhook_dispatcher},
 };
 use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::EnvFilter;
@@ -31,8 +35,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.psp_connect_timeout,
         config.psp_timeout,
     )?;
-    let state = AppState::new(db, psp, config.payments);
+    let webhooks = WebhookClient::new(config.webhooks)?;
+    let state = AppState::new(db, psp, config.payments, webhooks);
     sweeper::spawn(state.clone());
+    webhook_dispatcher::spawn(state.clone());
 
     let app = routes::router(state);
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;

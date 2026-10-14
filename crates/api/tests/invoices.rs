@@ -6,7 +6,10 @@
 use std::time::Duration;
 
 use api::{
-    auth::seed_dev_key, config::PaymentSettings, routes::router, services::psp_client::PspClient,
+    auth::seed_dev_key,
+    config::{PaymentSettings, WebhookSettings},
+    routes::router,
+    services::{psp_client::PspClient, webhook_delivery::WebhookClient},
     state::AppState,
 };
 use axum::{
@@ -32,7 +35,12 @@ fn state(db: &PgPool) -> AppState {
         Duration::from_millis(100),
     )
     .unwrap();
-    AppState::new(db.clone(), psp, PaymentSettings::default())
+    AppState::new(
+        db.clone(),
+        psp,
+        PaymentSettings::default(),
+        WebhookClient::new(WebhookSettings::default()).unwrap(),
+    )
 }
 
 async fn call(

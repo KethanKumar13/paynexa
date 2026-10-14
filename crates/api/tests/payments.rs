@@ -6,8 +6,12 @@
 use std::time::Duration;
 
 use api::{
-    auth::seed_dev_key, config::PaymentSettings, routes::router, services::psp_client::PspClient,
-    state::AppState, workers::sweeper,
+    auth::seed_dev_key,
+    config::{PaymentSettings, WebhookSettings},
+    routes::router,
+    services::{psp_client::PspClient, webhook_delivery::WebhookClient},
+    state::AppState,
+    workers::sweeper,
 };
 use axum::{
     body::Body,
@@ -51,7 +55,12 @@ impl Harness {
         let key = format!("pnx_live_{prefix}_testsecret");
         seed_dev_key(db, &key).await.unwrap();
         Self {
-            state: AppState::new(db.clone(), psp, settings),
+            state: AppState::new(
+                db.clone(),
+                psp,
+                settings,
+                WebhookClient::new(WebhookSettings::default()).unwrap(),
+            ),
             key,
         }
     }

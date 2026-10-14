@@ -24,6 +24,8 @@ use uuid::Uuid;
 
 const MAX_KEY_LEN: usize = 255;
 
+pub mod sink;
+
 #[derive(Clone, Debug)]
 pub struct Config {
     /// Delay before every token except `tok_timeout` settles.
@@ -101,12 +103,13 @@ pub fn app(config: Config) -> Router {
         .route("/charges", post(create_charge))
         .route("/charges/{key}", get(get_charge))
         .route("/stats", get(stats))
+        .with_state(state)
+        .merge(sink::router())
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
                 .on_response(DefaultOnResponse::new().level(Level::INFO)),
         )
-        .with_state(state)
 }
 
 fn error(status: StatusCode, code: &str, message: impl Into<String>) -> Response {
