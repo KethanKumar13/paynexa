@@ -1,6 +1,9 @@
 use std::time::Duration;
 
-use api::{auth, config::Config, routes, state::AppState};
+use api::{
+    auth, config::Config, routes, services::psp_client::PspClient, state::AppState,
+    workers::sweeper,
+};
 use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::EnvFilter;
 
@@ -23,7 +26,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::warn!("DEV ONLY API key is enabled; never set DEV_API_KEY in production");
     }
 
-    let app = routes::router(AppState { db });
+    let psp = PspClient::new(
+        &config.psp_url,
+        config.psp_connect_timeout,
+        config.psp_timeout,
+    )?;
+    let state = AppState::new(db, psp, config.payments);
+    sweeper::spawn(state.clone());
+
+    let app = routes::router(state);
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
     tracing::info!(addr = %config.bind_addr, "api listening");
     axum::serve(listener, app)

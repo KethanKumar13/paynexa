@@ -5,6 +5,7 @@ use axum::{
 };
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use sqlx::PgConnection;
 use uuid::Uuid;
 
@@ -18,7 +19,7 @@ use crate::{
     state::AppState,
 };
 
-const INVOICE_COLUMNS: &str =
+pub const INVOICE_COLUMNS: &str =
     "id, customer_id, status, total_cents, currency, due_date, created_at, updated_at";
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -123,7 +124,13 @@ pub async fn create(
             .collect(),
     );
 
-    webhooks::enqueue_invoice_event(&mut tx, business_id, "invoice.created", &invoice).await?;
+    webhooks::enqueue_event(
+        &mut tx,
+        business_id,
+        "invoice.created",
+        json!({ "invoice": &invoice }),
+    )
+    .await?;
     tx.commit().await?;
     Ok((StatusCode::CREATED, Json(invoice)))
 }

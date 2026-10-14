@@ -25,11 +25,14 @@ services:
       BIND_ADDR: 0.0.0.0:8080
       RUST_LOG: ${RUST_LOG:-info,tower_http=info}
       DEV_API_KEY: ${DEV_API_KEY:-pnx_live_devkey01_DEVONLY_local_demo_key_not_a_secret}
+      PSP_URL: http://psp:8081
     ports:
       - "127.0.0.1:${API_HOST_PORT:-8088}:8080"
     depends_on:
       db:
         condition: service_healthy
+      psp:
+        condition: service_started
 
   psp:
     build: .

@@ -1,4 +1,9 @@
-use api::{auth::seed_dev_key, routes::router, state::AppState};
+use std::time::Duration;
+
+use api::{
+    auth::seed_dev_key, config::PaymentSettings, routes::router, services::psp_client::PspClient,
+    state::AppState,
+};
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -14,6 +19,17 @@ async fn business(db: &PgPool, prefix: &str) -> String {
     key
 }
 
+// These tests never reach the PSP; the client only has to exist.
+fn state(db: &PgPool) -> AppState {
+    let psp = PspClient::new(
+        "http://127.0.0.1:9",
+        Duration::from_millis(100),
+        Duration::from_millis(100),
+    )
+    .unwrap();
+    AppState::new(db.clone(), psp, PaymentSettings::default())
+}
+
 async fn call(
     db: &PgPool,
     key: &str,
@@ -27,7 +43,7 @@ async fn call(
         .header("authorization", format!("Bearer {key}"))
         .header("content-type", "application/json");
     let body = body.map_or_else(Body::empty, |b| Body::from(b.to_string()));
-    let resp = router(AppState { db: db.clone() })
+    let resp = router(state(db))
         .oneshot(req.body(body).unwrap())
         .await
         .unwrap();

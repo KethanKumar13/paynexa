@@ -9,6 +9,7 @@ use crate::{auth, error::AppError, state::AppState};
 pub mod customers;
 pub mod health;
 pub mod invoices;
+pub mod payments;
 pub mod webhooks;
 
 pub fn router(state: AppState) -> Router {
@@ -23,6 +24,8 @@ pub fn router(state: AppState) -> Router {
             "/invoices/{id}/uncollectible",
             post(invoices::mark_uncollectible),
         )
+        .route("/invoices/{id}/pay", post(payments::pay))
+        .route("/payment_attempts/{id}", get(payments::get_attempt))
         .route(
             "/webhook_endpoints",
             post(webhooks::create).get(webhooks::list),

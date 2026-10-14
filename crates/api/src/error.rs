@@ -56,6 +56,22 @@ impl AppError {
         )
     }
 
+    pub fn payment_in_progress() -> Self {
+        Self::new(
+            StatusCode::CONFLICT,
+            "payment_in_progress",
+            "a payment attempt for this invoice is already in progress",
+        )
+    }
+
+    pub fn idempotency_conflict() -> Self {
+        Self::new(
+            StatusCode::CONFLICT,
+            "idempotency_conflict",
+            "Idempotency-Key was already used with a different request",
+        )
+    }
+
     pub fn invalid_transition(current: &str, target: &str) -> Self {
         let mut err = Self::new(
             StatusCode::CONFLICT,

@@ -2,11 +2,10 @@ use axum::{Extension, Json, extract::State, http::StatusCode};
 use chrono::{DateTime, Utc};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 use sqlx::PgConnection;
 use uuid::Uuid;
 
-use super::invoices::Invoice;
 use crate::{auth::BusinessId, error::AppError, extract::ApiJson, state::AppState};
 
 const MAX_URL_LEN: usize = 2048;
@@ -94,17 +93,17 @@ pub async fn list(
     Ok(Json(endpoints))
 }
 
-/// Outbox write: call inside the transaction that changed the invoice.
-pub async fn enqueue_invoice_event(
+/// Outbox write: call inside the transaction that made the state change.
+pub async fn enqueue_event(
     conn: &mut PgConnection,
     business_id: Uuid,
     event_type: &str,
-    invoice: &Invoice,
+    data: Value,
 ) -> Result<(), AppError> {
     let payload = json!({
         "type": event_type,
         "created_at": Utc::now(),
-        "data": { "invoice": invoice },
+        "data": data,
     });
     sqlx::query(
         "INSERT INTO webhook_events (business_id, endpoint_id, event_type, payload)
