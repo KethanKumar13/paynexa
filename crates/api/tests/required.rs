@@ -140,6 +140,21 @@ impl Harness {
         .await
     }
 
+    async fn pay_raw(&self, invoice_id: &str, token: &str, key: &str) -> (StatusCode, String) {
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/invoices/{invoice_id}/pay"))
+            .header("authorization", format!("Bearer {}", self.key))
+            .header("content-type", "application/json")
+            .header("idempotency-key", key)
+            .body(Body::from(json!({ "card_token": token }).to_string()))
+            .unwrap();
+        let resp = router(self.state.clone()).oneshot(req).await.unwrap();
+        let status = resp.status();
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        (status, String::from_utf8(bytes.to_vec()).unwrap())
+    }
+
     async fn open_invoice(&self) -> String {
         let (_, customer) = self
             .request(
@@ -263,13 +278,15 @@ async fn idempotent_retry_returns_same_response_without_second_psp_call(db: PgPo
     let h = Harness::new(&db, "reqidem1").await;
     let invoice = h.open_invoice().await;
 
-    let first = h.pay(&invoice, "tok_success", "retry-me").await;
+    let first = h.pay_raw(&invoice, "tok_success", "retry-me").await;
     assert_eq!(first.0, StatusCode::OK, "{}", first.1);
     for _ in 0..2 {
-        assert_eq!(h.pay(&invoice, "tok_success", "retry-me").await, first);
+        // Byte-for-byte, not just equal JSON values.
+        assert_eq!(h.pay_raw(&invoice, "tok_success", "retry-me").await, first);
     }
 
-    let attempt_id = first.1["id"].as_str().unwrap();
+    let first: Value = serde_json::from_str(&first.1).unwrap();
+    let attempt_id = first["id"].as_str().unwrap();
     let stats = h.psp_stats().await;
     assert_eq!(stats["charges"][attempt_id]["calls"], 1, "{stats}");
     assert_eq!(stats["total_charge_requests"], 1, "{stats}");

@@ -139,7 +139,7 @@ pub async fn finalize(
              WHERE payment_attempt_id = $1",
         )
         .bind(attempt_id)
-        .bind(json!(&attempt))
+        .bind(serde_json::to_string(&attempt).map_err(AppError::internal)?)
         .execute(&mut *tx)
         .await?;
         tracing::info!(%attempt_id, %invoice_id, status, "payment attempt settled");

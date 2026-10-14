@@ -17,7 +17,7 @@ Rust (Axum, Tokio, SQLx) + PostgreSQL + a mock PSP binary. Money is `BIGINT` cen
 | `webhook_events` | endpoint_id, event_type, payload, status, attempt_count, next_attempt_at, last_error | partial (next_attempt_at) WHERE status = 'pending' |
 
 - **Indexes:** tenant-scoped lists and lookups, one in-flight attempt per invoice, unique idempotency keys, API-key lookup by prefix, and small partial scans for the sweeper and webhook dispatcher.
-- **Keys and tenancy:** UUID v4 PKs, not enumerable in URLs. Every query filters on `business_id`; cross-tenant IDs return `404`.
+- **Keys and tenancy:** UUID v4 PKs, not enumerable in URLs. Every request-path query filters on `business_id`; cross-tenant IDs return `404`. Composite FKs `(business_id, customer_id)` and `(business_id, invoice_id)` make cross-tenant references impossible even with an application bug.
 - **Why this shape:** invoice (what is owed) and payment attempt (one try to collect) are separate, so a decline fails the attempt, not the invoice, and history is kept. Line items are rows, so the server computes the total; client-supplied totals are rejected (`422`).
 - **At 100x:** partition attempts and events by month, deliver webhooks via a queue, read replicas for lists, expire idempotency records after 24 h.
 
@@ -54,7 +54,7 @@ stateDiagram-v2
 
 ## 3. Payment Correctness & Failure Modes
 
-**Flow of `POST /invoices/{id}/pay`:**
+**Flow of `POST /invoices/{id}/pay`** (`routes/payments.rs::pay`, `services/payment_service.rs::finalize`, `workers/sweeper.rs::run_once`):
 1. **Txn 1:** insert idempotency record; `SELECT … FOR UPDATE` the invoice (scoped to `business_id`); require `open`; insert attempt `pending`; set invoice `processing`; **commit**.
 2. **PSP call** with no lock held: 2 s connect / 5 s total timeout, `Idempotency-Key = attempt_id`.
 3. **Txn 2:** `UPDATE payment_attempts … WHERE status IN ('pending','unknown')`, plus invoice, webhook outbox row and stored response together. 0 rows ⇒ already finalised, no-op.
@@ -76,7 +76,7 @@ stateDiagram-v2
 
 - **Outbox:** event rows (one per active endpoint) are written in the same transaction as the state change, so a committed payment never loses its event.
 - **Delivery:** a background dispatcher, off the request path, polls every 1 s. One short statement claims up to 20 due events (`FOR UPDATE SKIP LOCKED`) and leases them for 30 s by pushing `next_attempt_at`; delivery then runs with no lock held (5 s timeout, redirects not followed, 2xx = delivered). A crash mid-delivery just lets the lease expire, so the event is retried. Events for an inactive endpoint are marked `failed`. No ordering guarantee (a batch is sent concurrently and retries reorder events); payloads carry `created_at` and `GET /invoices/{id}` is the source of truth.
-- **Signing:** body = stored payload + `id`; headers `Paynexa-Event-Id`, `Paynexa-Event-Type`, `Paynexa-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, "<t>.<raw body>")>`; per-endpoint secret shown once and stored in plaintext, because HMAC needs the raw key (encrypt at rest in production). Receivers reject timestamps older than 5 min and dedupe on event ID (at-least-once).
+- **Signing:** body = stored payload + `id`; headers `Paynexa-Event-Id`, `Paynexa-Event-Type`, `Paynexa-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, "<t>.<raw body>")>`; per-endpoint secret shown once and stored in plaintext, because HMAC needs the raw key (encrypt at rest in production). Receivers reject timestamps older than 5 min and dedupe on event ID (at-least-once). Endpoint URLs are not SSRF-filtered (the demo receiver is internal); production would block private address ranges.
 - **Retries:** 0, 1 m, 5 m, 15 m, 1 h, 6 h (6 attempts, ~7.3 h), env-configurable for tests. Then `failed` with `last_error`; businesses reconcile via `GET /webhook_events?status=failed` and `GET /invoices/{id}`.
 
 ## 5. API Key Model
@@ -91,7 +91,7 @@ stateDiagram-v2
 
 1. **Refunds / partial payments:** need a ledger and extra states; the attempt model allows them later.
 2. **`draft` state and editing:** nothing edits invoices before issue.
-3. **Webhook replay endpoint:** failed events are queryable; replay is later ops tooling.
+3. **Webhook replay and per-invoice attempt list endpoints:** failed events and single attempts are queryable; these are later ops tooling.
 4. **API key management endpoints:** keys are seeded for now.
 5. **Rate limiting:** would be a per-key token bucket at the gateway, stricter on `/pay`.
 

@@ -1,11 +1,10 @@
 use axum::{
     Extension, Json,
     extract::State,
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -30,7 +29,7 @@ struct IdempotencyRecord {
     request_hash: Vec<u8>,
     payment_attempt_id: Option<Uuid>,
     response_status: Option<i32>,
-    response_body: Option<Value>,
+    response_body: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -178,7 +177,7 @@ async fn replay(
             .ok()
             .and_then(|c| StatusCode::from_u16(c).ok())
             .ok_or_else(|| AppError::internal("stored response status is invalid"))?;
-        return Ok((code, Json(body)).into_response());
+        return Ok((code, [(header::CONTENT_TYPE, "application/json")], body).into_response());
     }
     let attempt_id = record
         .payment_attempt_id

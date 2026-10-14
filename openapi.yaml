@@ -1,0 +1,630 @@
+openapi: 3.1.0
+info:
+  title: Paynexa Invoice & Payment API
+  version: 0.1.0
+  description: |
+    Invoices, payments and signed webhooks for a business. Money is always an
+    integer number of US cents.
+
+    Every error uses one shape: `{"error": {"code", "message", "details"?}}`.
+servers:
+  - url: http://127.0.0.1:8088
+    description: Local docker compose
+security:
+  - apiKey: []
+
+tags:
+  - name: Customers
+  - name: Invoices
+  - name: Payments
+  - name: Webhooks
+  - name: Health
+
+paths:
+  /healthz:
+    get:
+      tags: [Health]
+      operationId: healthCheck
+      summary: Liveness and database check
+      security: []
+      responses:
+        "200":
+          description: Service and database are reachable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, const: ok }
+
+  /customers:
+    post:
+      tags: [Customers]
+      operationId: createCustomer
+      summary: Create a customer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateCustomer" }
+            example: { name: Ada Lovelace, email: ada@example.com }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Customer" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+    get:
+      tags: [Customers]
+      operationId: listCustomers
+      summary: List customers (newest first)
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: One page of customers
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CustomerPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /customers/{id}:
+    get:
+      tags: [Customers]
+      operationId: getCustomer
+      summary: Get a customer
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "200":
+          description: The customer
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Customer" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /invoices:
+    post:
+      tags: [Invoices]
+      operationId: createInvoice
+      summary: Create an invoice
+      description: |
+        The server computes every line total and the invoice total. Unknown
+        fields, including a client-supplied `total_cents`, are rejected with
+        `422`. Creates an `invoice.created` webhook event.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateInvoice" }
+            example:
+              customer_id: 85974aa3-9406-425b-ac1b-ea8e5ef056d2
+              due_date: "2026-12-31"
+              line_items:
+                - { description: Consulting, quantity: 2, unit_amount_cents: 1500 }
+                - { description: Hosting, quantity: 1, unit_amount_cents: 99 }
+      responses:
+        "201":
+          description: Created in state `open`, with line items
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Invoice" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+    get:
+      tags: [Invoices]
+      operationId: listInvoices
+      summary: List invoices (newest first), optionally by state
+      description: List items omit `line_items`; fetch one invoice to get them.
+      parameters:
+        - name: state
+          in: query
+          schema: { $ref: "#/components/schemas/InvoiceStatus" }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: One page of invoices
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InvoicePage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /invoices/{id}:
+    get:
+      tags: [Invoices]
+      operationId: getInvoice
+      summary: Get an invoice with its line items
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "200":
+          description: The invoice
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Invoice" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /invoices/{id}/void:
+    post:
+      tags: [Invoices]
+      operationId: voidInvoice
+      summary: Void an open invoice (terminal)
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "200":
+          description: Now `void`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Invoice" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /invoices/{id}/uncollectible:
+    post:
+      tags: [Invoices]
+      operationId: markInvoiceUncollectible
+      summary: Mark an open invoice uncollectible (terminal)
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "200":
+          description: Now `uncollectible`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Invoice" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /invoices/{id}/pay:
+    post:
+      tags: [Payments]
+      operationId: payInvoice
+      summary: Attempt to pay an open invoice
+      description: |
+        Records a payment attempt, charges the PSP (5 s timeout) and updates the
+        invoice. Retrying with the same `Idempotency-Key` and body replays the
+        stored response without calling the PSP again; while the first attempt
+        is still unresolved it returns that attempt with `202`.
+      parameters:
+        - $ref: "#/components/parameters/Id"
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 255 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PayInvoice" }
+            example: { card_token: tok_success }
+      responses:
+        "200":
+          description: |
+            Final outcome. A declined card is still `200`, with attempt
+            `status: failed` and a `failure_code`; the invoice returns to `open`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentAttempt" }
+              examples:
+                succeeded:
+                  value:
+                    id: b3feaa1f-bd9a-4d2a-a3d0-d1a9bb7f47a8
+                    invoice_id: b4c98549-1388-45cb-9b59-7b8b08f8cd7b
+                    status: succeeded
+                    amount_cents: 4200
+                    psp_reference: 5c10a709-2b40-43f2-9723-28bf7c5afe67
+                    failure_code: null
+                    created_at: "2026-10-14T10:00:00Z"
+                    updated_at: "2026-10-14T10:00:00Z"
+                    invoice_status: paid
+                declined:
+                  value:
+                    id: d777a36b-cc0a-4e02-8ae1-0aa5d12109bc
+                    invoice_id: fbfe08a4-1f0e-4642-975d-e2dc54e7022e
+                    status: failed
+                    amount_cents: 4200
+                    psp_reference: null
+                    failure_code: card_declined
+                    created_at: "2026-10-14T10:00:00Z"
+                    updated_at: "2026-10-14T10:00:00Z"
+                    invoice_status: open
+        "202":
+          description: |
+            Outcome not yet known (PSP timeout, 5xx or dropped connection).
+            Attempt `status: unknown`, invoice `processing`. Poll
+            `GET /payment_attempts/{id}` or wait for the webhook; do not retry
+            with a new key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentAttempt" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: |
+            `payment_in_progress` (another attempt is unresolved),
+            `invalid_state_transition` (invoice not `open`, e.g. already paid),
+            or `idempotency_conflict` (key reused with a different body).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              examples:
+                in_progress:
+                  value:
+                    error:
+                      code: payment_in_progress
+                      message: a payment attempt for this invoice is already in progress
+                already_paid:
+                  value:
+                    error:
+                      code: invalid_state_transition
+                      message: invoice cannot move from paid to processing
+                      details: { current_state: paid, target_state: processing }
+                key_reused:
+                  value:
+                    error:
+                      code: idempotency_conflict
+                      message: Idempotency-Key was already used with a different request
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /payment_attempts/{id}:
+    get:
+      tags: [Payments]
+      operationId: getPaymentAttempt
+      summary: Get a payment attempt (poll after a 202)
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "200":
+          description: The attempt and its invoice's current state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentAttempt" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /webhook_endpoints:
+    post:
+      tags: [Webhooks]
+      operationId: createWebhookEndpoint
+      summary: Register a webhook endpoint
+      description: The signing secret is returned only in this response.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [url]
+              properties:
+                url: { type: string, format: uri, maxLength: 2048, description: Absolute http(s) URL }
+            example: { url: "http://psp:8081/sink" }
+      responses:
+        "201":
+          description: Registered
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreatedWebhookEndpoint" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+    get:
+      tags: [Webhooks]
+      operationId: listWebhookEndpoints
+      summary: List webhook endpoints (secrets are never listed)
+      responses:
+        "200":
+          description: All endpoints of the business
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/WebhookEndpoint" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /webhook_events:
+    get:
+      tags: [Webhooks]
+      operationId: listWebhookEvents
+      summary: List webhook deliveries, e.g. `status=failed` to reconcile
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [pending, delivered, failed] }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: One page of events
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookEventPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+webhooks:
+  invoice.created:
+    post:
+      operationId: onInvoiceCreated
+      summary: An invoice was created
+      parameters: &webhookHeaders
+        - name: Paynexa-Event-Id
+          in: header
+          required: true
+          description: Unique per delivery target; dedupe on it (delivery is at-least-once).
+          schema: { type: string, format: uuid }
+        - name: Paynexa-Event-Type
+          in: header
+          required: true
+          schema: { type: string }
+        - name: Paynexa-Signature
+          in: header
+          required: true
+          description: |
+            `t=<unix seconds>,v1=<hex HMAC-SHA256(secret, "<t>.<raw body>")>`.
+            Reject if the HMAC does not match or `t` is more than 5 minutes old.
+          schema: { type: string }
+      requestBody: &webhookBody
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WebhookPayload" }
+      responses: &webhookResponses
+        "200":
+          description: Any 2xx marks the event delivered; anything else is retried.
+  invoice.paid:
+    post:
+      operationId: onInvoicePaid
+      summary: An invoice was paid
+      parameters: *webhookHeaders
+      requestBody: *webhookBody
+      responses: *webhookResponses
+  invoice.payment_failed:
+    post:
+      operationId: onInvoicePaymentFailed
+      summary: A payment attempt was definitively declined
+      parameters: *webhookHeaders
+      requestBody: *webhookBody
+      responses: *webhookResponses
+
+components:
+  securitySchemes:
+    apiKey:
+      type: http
+      scheme: bearer
+      description: "`Authorization: Bearer pnx_live_<prefix8>_<secret>`, scoped to one business."
+
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    Cursor:
+      name: cursor
+      in: query
+      description: The `next_cursor` from the previous page.
+      schema: { type: string, format: uuid }
+
+  responses:
+    Unauthorized:
+      description: Missing, invalid or revoked API key
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: { code: unauthorized, message: "missing, invalid or revoked API key" } }
+    NotFound:
+      description: Not found, or owned by another business
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: { code: not_found, message: invoice not found } }
+    Conflict:
+      description: Invalid state transition
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example:
+            error:
+              code: invalid_state_transition
+              message: invoice cannot move from void to void
+              details: { current_state: void, target_state: void }
+    ValidationError:
+      description: Malformed or invalid request
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example:
+            error:
+              code: validation_error
+              message: "Failed to deserialize the JSON body into the target type: total_cents: unknown field `total_cents`"
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum:
+                - unauthorized
+                - not_found
+                - method_not_allowed
+                - validation_error
+                - invalid_state_transition
+                - payment_in_progress
+                - idempotency_conflict
+                - internal_error
+            message: { type: string }
+            details:
+              type: object
+              description: Present for `invalid_state_transition` (`current_state`, `target_state`).
+
+    CreateCustomer:
+      type: object
+      additionalProperties: false
+      required: [name, email]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        email: { type: string, format: email, maxLength: 320 }
+    Customer:
+      type: object
+      required: [id, name, email, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        email: { type: string }
+        created_at: { type: string, format: date-time }
+    CustomerPage:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/Customer" } }
+        next_cursor: { type: [string, "null"], format: uuid }
+
+    InvoiceStatus:
+      type: string
+      enum: [open, processing, paid, void, uncollectible]
+    LineItemInput:
+      type: object
+      additionalProperties: false
+      required: [description, quantity, unit_amount_cents]
+      properties:
+        description: { type: string, minLength: 1, maxLength: 500 }
+        quantity: { type: integer, format: int64, minimum: 1 }
+        unit_amount_cents: { type: integer, format: int64, minimum: 0 }
+    CreateInvoice:
+      type: object
+      additionalProperties: false
+      required: [customer_id, due_date, line_items]
+      properties:
+        customer_id: { type: string, format: uuid }
+        due_date: { type: string, format: date }
+        line_items:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { $ref: "#/components/schemas/LineItemInput" }
+    LineItem:
+      type: object
+      required: [description, quantity, unit_amount_cents, line_total_cents]
+      properties:
+        description: { type: string }
+        quantity: { type: integer, format: int64 }
+        unit_amount_cents: { type: integer, format: int64 }
+        line_total_cents: { type: integer, format: int64, description: quantity × unit_amount_cents }
+    Invoice:
+      type: object
+      required: [id, customer_id, status, total_cents, currency, due_date, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        customer_id: { type: string, format: uuid }
+        status: { $ref: "#/components/schemas/InvoiceStatus" }
+        total_cents: { type: integer, format: int64, description: "Sum of line totals, computed by the server" }
+        currency: { type: string, const: USD }
+        due_date: { type: string, format: date }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        line_items:
+          type: array
+          description: Omitted in list responses.
+          items: { $ref: "#/components/schemas/LineItem" }
+    InvoicePage:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/Invoice" } }
+        next_cursor: { type: [string, "null"], format: uuid }
+
+    PayInvoice:
+      type: object
+      additionalProperties: false
+      required: [card_token]
+      properties:
+        card_token:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Mock PSP token, e.g. `tok_success`, `tok_card_declined`, `tok_timeout`.
+    PaymentAttempt:
+      type: object
+      required: [id, invoice_id, status, amount_cents, psp_reference, failure_code, created_at, updated_at, invoice_status]
+      properties:
+        id: { type: string, format: uuid, description: Also the PSP idempotency key }
+        invoice_id: { type: string, format: uuid }
+        status:
+          type: string
+          enum: [pending, succeeded, failed, unknown]
+          description: "`unknown` = the PSP outcome is not confirmed yet; the sweeper reconciles it."
+        amount_cents: { type: integer, format: int64 }
+        psp_reference: { type: [string, "null"] }
+        failure_code:
+          type: [string, "null"]
+          description: e.g. `card_declined`, `insufficient_funds`, `processing_error`, `not_received_by_psp`
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        invoice_status: { $ref: "#/components/schemas/InvoiceStatus" }
+
+    WebhookEndpoint:
+      type: object
+      required: [id, url, active, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        url: { type: string }
+        active: { type: boolean }
+        created_at: { type: string, format: date-time }
+    CreatedWebhookEndpoint:
+      allOf:
+        - $ref: "#/components/schemas/WebhookEndpoint"
+        - type: object
+          required: [signing_secret]
+          properties:
+            signing_secret: { type: string, description: "`whsec_<64 hex>`; shown only once" }
+    WebhookEvent:
+      type: object
+      required: [id, endpoint_id, event_type, status, attempt_count, next_attempt_at, last_error, delivered_at, created_at, payload]
+      properties:
+        id: { type: string, format: uuid }
+        endpoint_id: { type: string, format: uuid }
+        event_type: { type: string, enum: [invoice.created, invoice.paid, invoice.payment_failed] }
+        status: { type: string, enum: [pending, delivered, failed] }
+        attempt_count: { type: integer, format: int32 }
+        next_attempt_at: { type: string, format: date-time }
+        last_error: { type: [string, "null"] }
+        delivered_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+        payload: { type: object, description: "The body that is delivered, without `id`" }
+    WebhookEventPage:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/WebhookEvent" } }
+        next_cursor: { type: [string, "null"], format: uuid }
+    WebhookPayload:
+      type: object
+      required: [id, type, created_at, data]
+      properties:
+        id: { type: string, format: uuid, description: Same as `Paynexa-Event-Id` }
+        type: { type: string, enum: [invoice.created, invoice.paid, invoice.payment_failed] }
+        created_at: { type: string, format: date-time }
+        data:
+          type: object
+          required: [invoice]
+          properties:
+            invoice: { $ref: "#/components/schemas/Invoice" }
+            payment_attempt:
+              $ref: "#/components/schemas/PaymentAttempt"
+              description: Present on `invoice.paid` and `invoice.payment_failed`.
