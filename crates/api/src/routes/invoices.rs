@@ -98,13 +98,14 @@ pub async fn create(
     .await?;
 
     for (position, line) in lines.iter().enumerate() {
+        let position = i32::try_from(position).map_err(AppError::internal)?;
         sqlx::query(
             "INSERT INTO invoice_line_items
                  (invoice_id, position, description, quantity, unit_amount_cents, line_total_cents)
              VALUES ($1, $2, $3, $4, $5, $6)",
         )
         .bind(invoice.id)
-        .bind(position as i32)
+        .bind(position)
         .bind(&line.description)
         .bind(line.quantity)
         .bind(line.unit_amount_cents)

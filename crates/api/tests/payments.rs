@@ -1,3 +1,8 @@
+#![expect(
+    clippy::unwrap_used,
+    reason = "test helpers: a failed setup step should abort the test"
+)]
+
 use std::time::Duration;
 
 use api::{

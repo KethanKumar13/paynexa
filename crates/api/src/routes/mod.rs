@@ -100,8 +100,9 @@ pub struct Page<T> {
 impl<T> Page<T> {
     /// `rows` must be fetched with `LIMIT limit + 1` to detect a following page.
     pub fn from_rows(mut rows: Vec<T>, limit: i64, id_of: impl Fn(&T) -> Uuid) -> Self {
-        let has_more = rows.len() as i64 > limit;
-        rows.truncate(limit as usize);
+        let limit = usize::try_from(limit).unwrap_or(0);
+        let has_more = rows.len() > limit;
+        rows.truncate(limit);
         let next_cursor = if has_more {
             rows.last().map(id_of)
         } else {
